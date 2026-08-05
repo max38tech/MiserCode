@@ -7,7 +7,13 @@ import cors from "cors";
 import { config as loadEnv } from "dotenv";
 import { Orchestrator } from "./orchestrator.js";
 import { attachWebSocketServer } from "./wsServer.js";
-import { maskSecret, upsertEnvValue } from "./envFile.js";
+import { upsertEnvValue } from "./envFile.js";
+import {
+  clearGoogleApiKey,
+  defaultOpencodeAuthPath,
+  getGoogleCredentialStatus,
+  setGoogleApiKey,
+} from "./opencodeAuth.js";
 
 // __dirname here is server/src (dev, via tsx) or server/dist (built), so
 // "../.." reaches the repo root in both cases. Loading the root .env
@@ -18,6 +24,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const ENV_PATH = path.join(REPO_ROOT, ".env");
 loadEnv({ path: ENV_PATH, quiet: true });
+const OPENCODE_AUTH_PATH = defaultOpencodeAuthPath();
 
 const PORT = Number(process.env.PORT ?? 3001);
 
@@ -29,8 +36,12 @@ const WORK_DIR = process.env.PIPELINE_WORK_DIR
   : path.join(REPO_ROOT, "work");
 fs.mkdirSync(WORK_DIR, { recursive: true });
 
-export function createApp(orchestrator: Orchestrator, options: { envPath?: string } = {}) {
+export function createApp(
+  orchestrator: Orchestrator,
+  options: { envPath?: string; opencodeAuthPath?: string } = {}
+) {
   const envPath = options.envPath ?? ENV_PATH;
+  const opencodeAuthPath = options.opencodeAuthPath ?? OPENCODE_AUTH_PATH;
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -44,10 +55,17 @@ export function createApp(orchestrator: Orchestrator, options: { envPath?: strin
   });
 
   app.get("/api/settings", (_req: Request, res: Response) => {
-    const key = process.env.GEMINI_API_KEY ?? "";
+    // getGoogleCredentialStatus reflects opencode's actual credential store
+    // (~/.local/share/opencode/auth.json), which is what genuinely
+    // determines which key opencode calls with. GEMINI_API_KEY is written
+    // alongside it as a best-effort fallback for machines that have never
+    // run `opencode auth login` at all, but once any credential is stored
+    // there, opencode ignores the env var entirely - so that store, not
+    // the env var, is the source of truth reported here.
+    const status = getGoogleCredentialStatus(opencodeAuthPath);
     res.json({
-      geminiApiKeyConfigured: key.length > 0,
-      geminiApiKeyPreview: key ? maskSecret(key) : null,
+      geminiApiKeyConfigured: status.configured,
+      geminiApiKeyPreview: status.preview,
       workDir: orchestrator.getWorkDir(),
     });
   });
@@ -59,16 +77,26 @@ export function createApp(orchestrator: Orchestrator, options: { envPath?: strin
       return;
     }
 
-    // An empty string intentionally clears the key, falling back to
-    // whatever opencode already has stored via `opencode auth login`.
     const trimmed = geminiApiKey.trim();
-    process.env.GEMINI_API_KEY = trimmed;
-    upsertEnvValue(envPath, "GEMINI_API_KEY", trimmed);
 
+    if (trimmed) {
+      // Equivalent to running `opencode auth login` and pasting this key -
+      // the only thing that reliably makes opencode actually use it.
+      setGoogleApiKey(opencodeAuthPath, trimmed);
+      process.env.GEMINI_API_KEY = trimmed;
+      upsertEnvValue(envPath, "GEMINI_API_KEY", trimmed);
+    } else {
+      // Equivalent to `opencode auth logout google`.
+      clearGoogleApiKey(opencodeAuthPath);
+      process.env.GEMINI_API_KEY = "";
+      upsertEnvValue(envPath, "GEMINI_API_KEY", "");
+    }
+
+    const status = getGoogleCredentialStatus(opencodeAuthPath);
     res.json({
       ok: true,
-      geminiApiKeyConfigured: trimmed.length > 0,
-      geminiApiKeyPreview: trimmed ? maskSecret(trimmed) : null,
+      geminiApiKeyConfigured: status.configured,
+      geminiApiKeyPreview: status.preview,
     });
   });
 
@@ -102,7 +130,7 @@ export function createApp(orchestrator: Orchestrator, options: { envPath?: strin
 
 export function createServer(
   orchestrator: Orchestrator = new Orchestrator({ workDir: WORK_DIR }),
-  options: { envPath?: string } = {}
+  options: { envPath?: string; opencodeAuthPath?: string } = {}
 ) {
   const app = createApp(orchestrator, options);
   const server = http.createServer(app);

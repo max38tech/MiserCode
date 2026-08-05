@@ -32,14 +32,14 @@ describe("SettingsModal", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("shows 'no key configured' status when none is set", async () => {
+  it("shows 'no credential stored' status when none is set", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ geminiApiKeyConfigured: false, geminiApiKeyPreview: null, workDir: "/work" })
     );
     render(<SettingsModal open onClose={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("settings-status")).toHaveTextContent(/no key configured/i);
+      expect(screen.getByTestId("settings-status")).toHaveTextContent(/no credential stored/i);
     });
     expect(fetchMock).toHaveBeenCalledWith("/api/settings");
   });
@@ -93,7 +93,7 @@ describe("SettingsModal", () => {
     render(<SettingsModal open onClose={vi.fn()} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /clear saved key/i })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /remove stored credential/i })).toBeDisabled();
     });
   });
 

@@ -86,9 +86,12 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               Gemini API Key
             </label>
             <p className="mb-2 text-xs text-slate-500">
-              Used by Phase 2 (opencode / Gemini). Optional — if opencode already has a
-              credential from <code className="text-slate-400">opencode auth login</code>, you
-              only need this to override it or if that credential runs out of quota.
+              Used by Phase 2 (opencode / Gemini). Saving writes directly into opencode's own
+              credential store (<code className="text-slate-400">~/.local/share/opencode/auth.json</code>)
+              — the same file <code className="text-slate-400">opencode auth login</code> writes
+              to — since opencode ignores environment variables once any credential is stored
+              there. Use this to set it up initially, or to swap in a new key once the current
+              one runs out of quota.
             </p>
 
             <div className="mb-2 text-xs text-slate-400" data-testid="settings-status">
@@ -100,7 +103,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                   <span className="font-mono text-slate-300">{settings.geminiApiKeyPreview}</span>
                 </>
               ) : (
-                "No key configured — using opencode's own stored credentials, if any."
+                "No credential stored — opencode will error until one is set here or via `opencode auth login`."
               )}
             </div>
 
@@ -140,8 +143,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 onClick={handleClear}
                 disabled={saving || !settings?.geminiApiKeyConfigured}
                 className="text-xs text-slate-500 underline decoration-dotted hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
+                title="Removes the Google credential from opencode's auth store entirely (same as `opencode auth logout google`)"
               >
-                Clear saved key
+                Remove stored credential
               </button>
               {justSaved && (
                 <span className="flex items-center gap-1 text-xs text-emerald-400">

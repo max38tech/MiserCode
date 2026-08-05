@@ -28,16 +28,18 @@ describe("HTTP + WebSocket server", () => {
   let wsUrl: string;
   let envDir: string;
   let envPath: string;
+  let opencodeAuthPath: string;
   const originalGeminiApiKey = process.env.GEMINI_API_KEY;
 
   beforeEach(async () => {
     envDir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-test-"));
     envPath = path.join(envDir, ".env");
+    opencodeAuthPath = path.join(envDir, "opencode-auth.json");
     delete process.env.GEMINI_API_KEY;
 
     const { spawnFn } = createScriptedSpawn([successfulPlan, successfulGenerate, successfulVerify]);
     const orchestrator = new Orchestrator({ spawnFn });
-    ({ server } = createServer(orchestrator, { envPath }));
+    ({ server } = createServer(orchestrator, { envPath, opencodeAuthPath }));
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const { port } = server.address() as AddressInfo;
     baseUrl = `http://localhost:${port}`;
@@ -124,7 +126,7 @@ describe("HTTP + WebSocket server", () => {
     expect(body.geminiApiKeyPreview).toBeNull();
   });
 
-  it("sets the Gemini key, masks it in the response, persists it to disk, and applies it live", async () => {
+  it("sets the Gemini key in opencode's own auth store, masks it in the response, and applies it live", async () => {
     const putRes = await fetch(`${baseUrl}/api/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -137,6 +139,13 @@ describe("HTTP + WebSocket server", () => {
     expect(putBody.geminiApiKeyPreview).toBe("AIza••••1234");
     expect(putBody.geminiApiKeyPreview).not.toContain("ABCDEFGHIJKLMNOP");
 
+    // This is the file opencode itself reads and always prefers over any
+    // env var once populated - it's what actually has to change.
+    const authFile = JSON.parse(fs.readFileSync(opencodeAuthPath, "utf8"));
+    expect(authFile.google).toEqual({ type: "api", key: "AIzaSyABCDEFGHIJKLMNOP1234" });
+
+    // .env / process.env are still updated too, as a best-effort fallback
+    // for machines with no stored opencode credential at all.
     expect(process.env.GEMINI_API_KEY).toBe("AIzaSyABCDEFGHIJKLMNOP1234");
     expect(fs.readFileSync(envPath, "utf8")).toContain(
       "GEMINI_API_KEY=AIzaSyABCDEFGHIJKLMNOP1234"
@@ -148,7 +157,7 @@ describe("HTTP + WebSocket server", () => {
     expect(getBody.geminiApiKeyPreview).toBe("AIza••••1234");
   });
 
-  it("clears the Gemini key when given an empty string", async () => {
+  it("clears the Gemini key from opencode's auth store when given an empty string", async () => {
     await fetch(`${baseUrl}/api/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -163,6 +172,9 @@ describe("HTTP + WebSocket server", () => {
     const clearBody = await clearRes.json();
     expect(clearBody.geminiApiKeyConfigured).toBe(false);
     expect(process.env.GEMINI_API_KEY).toBe("");
+
+    const authFile = JSON.parse(fs.readFileSync(opencodeAuthPath, "utf8"));
+    expect(authFile.google).toBeUndefined();
   });
 
   it("rejects a non-string geminiApiKey", async () => {

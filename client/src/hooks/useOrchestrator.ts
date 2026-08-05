@@ -68,12 +68,25 @@ export function useOrchestrator() {
     const socket = new WebSocket(wsUrl());
     socketRef.current = socket;
 
+    // Every handler checks it's still the tracked socket before doing
+    // anything, rather than trusting that stale handlers were always
+    // detached in time. This is defense in depth on top of the explicit
+    // detach-before-close in the effect cleanup below: without it, a
+    // late-firing stale onclose blindly nulls socketRef.current (even
+    // though a *different* socket has since taken over as current) and
+    // then schedules a phantom reconnect — spawning yet another socket
+    // while the actually-current one is silently orphaned, still open,
+    // still forwarding every broadcast into state. That's what turned a
+    // single duplicated line into an escalating 2x-then-3x-then-more mess
+    // over the course of a long-running dev session.
     socket.onopen = () => {
+      if (socketRef.current !== socket) return;
       reconnectAttemptRef.current = 0;
       setConnectionStatus("open");
     };
 
     socket.onclose = () => {
+      if (socketRef.current !== socket) return;
       setConnectionStatus("closed");
       socketRef.current = null;
       if (unmountedRef.current) return;
@@ -88,6 +101,7 @@ export function useOrchestrator() {
     };
 
     socket.onmessage = (event) => {
+      if (socketRef.current !== socket) return;
       let message: ServerMessage;
       try {
         message = JSON.parse(event.data);

@@ -20,9 +20,8 @@ Phase 3  Verification       claude -p "Inspect repo, run tests, fix errors until
 - Node.js >= 18.18
 - [`claude`](https://docs.claude.com/en/docs/claude-code) CLI installed and authenticated on `PATH`
 - [`opencode`](https://opencode.ai) CLI installed on `PATH`, authenticated to a
-  provider — check with `opencode auth list`. If it already shows a Google/Gemini
-  credential (from `opencode auth login`), you do **not** need `GEMINI_API_KEY`
-  in `.env`; it's only a fallback for machines without a stored credential.
+  provider — check with `opencode auth list`, or set one up from the
+  dashboard's Settings panel (gear icon), see below.
 
 ## Setup
 
@@ -40,18 +39,22 @@ on (where `SPEC.md` and generated source land). It defaults to
 ## Changing the Gemini API key
 
 Click the gear icon in the header to open **Settings**. You can set, view
-(masked), or clear the Gemini API key from there at any time — including
-mid-session if a key runs out of quota — with no server restart needed:
-saving calls `PUT /api/settings`, which updates `process.env.GEMINI_API_KEY`
-immediately and persists it to `.env` (via `server/src/envFile.ts`) so it
-survives the next restart too. The next "generate" phase run picks it up
-automatically since `Orchestrator.buildCommand` reads `process.env` fresh on
-every invocation.
+(masked), or remove the Gemini API key from there at any time — including
+mid-session if the current one runs out of quota — with no server restart
+needed.
 
-This is optional, not required setup: if `opencode auth list` already shows
-a stored Google/Gemini credential, the pipeline works without ever touching
-this field. Use it to override that credential, or to recover after the one
-in use hits its quota (see Troubleshooting below).
+Saving writes directly into **opencode's own credential store**,
+`~/.local/share/opencode/auth.json` — the same file `opencode auth login`
+writes to (`PUT /api/settings` → `server/src/opencodeAuth.ts`). This matters
+because opencode ignores environment variables entirely for a provider once
+*any* credential is stored there for it; setting `GEMINI_API_KEY` alone has
+no effect in that case; it only serves as a best-effort fallback for a
+machine that has never run `opencode auth login` at all
+(`server/src/envFile.ts` handles that half). If you only set the env var and
+wonder why opencode still seems to be using an old/different key, this is
+why — use Settings (or `opencode auth login` directly) instead.
+
+"Remove stored credential" is equivalent to `opencode auth logout google`.
 
 ## Development
 
@@ -131,3 +134,28 @@ git-bash's `which`, which resolves `PATH` differently).
 **Generated files show up in an unexpected folder.** All three phases run
 with their cwd set to `PIPELINE_WORK_DIR` (default: `<repo root>/work/`,
 auto-created). If that folder doesn't have what you expect, check `.env`.
+
+**I set a new key in Settings but it's still quota-exceeded / AI Studio shows
+zero usage on the new key.** This was a real bug: opencode ignores
+`GEMINI_API_KEY` entirely for the Google provider once *any* credential is
+already stored in `~/.local/share/opencode/auth.json` — env vars are only
+consulted when that file has no entry for the provider at all. Settings now
+writes directly into that file, not just the env var, so this should no
+longer happen; if it still does, run `opencode auth list` to see which
+credential is actually stored, and cross-check its key preview against what
+Settings shows.
+
+**The Live Terminal Output shows every line doubled (or worse, tripled and
+climbing) during a long dev session.** React 18 StrictMode double-invokes
+effects in development to catch missing cleanup; `useOrchestrator`'s
+WebSocket-connect effect used to leave a stale socket's handlers attached
+after `close()` (an async operation), so a message arriving during that
+window could land on both the old and new socket. Worse, if that stale
+socket's `onclose` fired later, it would blindly null the tracked ref and
+schedule a phantom reconnect — spawning yet another socket while the
+previous one silently leaked, orphaned but still receiving every broadcast,
+compounding over the length of the session. Fixed by detaching handlers
+before `close()` in the effect cleanup, and by having every handler check
+it's still the currently-tracked socket before doing anything. Dev-only
+(`npm run dev`) — StrictMode's double-invoke is stripped from production
+builds, so `client/dist` was never affected.
