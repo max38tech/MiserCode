@@ -137,7 +137,22 @@ export function useOrchestrator() {
     return () => {
       unmountedRef.current = true;
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      socketRef.current?.close();
+
+      // Detach handlers before closing, not just close(): WebSocket.close()
+      // is async (real close handshake), so under React 18 StrictMode's
+      // dev-only double-invoke of effects, a message can still arrive on
+      // this socket after close() is called but before the connection
+      // actually drops — while the *next* mount's socket is also live and
+      // receiving the same broadcast. Without this, that race double-fires
+      // every server message (log lines, phase updates, etc.) into state.
+      const socket = socketRef.current;
+      if (socket) {
+        socket.onopen = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.onmessage = null;
+        socket.close();
+      }
     };
   }, [connect]);
 
