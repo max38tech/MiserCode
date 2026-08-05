@@ -1,11 +1,31 @@
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Request, type Response } from "express";
 import cors from "cors";
+import { config as loadEnv } from "dotenv";
 import { Orchestrator } from "./orchestrator.js";
 import { attachWebSocketServer } from "./wsServer.js";
 
+// __dirname here is server/src (dev, via tsx) or server/dist (built), so
+// "../.." reaches the repo root in both cases. Loading the root .env
+// explicitly means it's picked up regardless of which directory the
+// process was actually launched from (npm workspaces run scripts with
+// cwd set to the workspace folder, not the repo root).
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, "../..");
+loadEnv({ path: path.join(REPO_ROOT, ".env"), quiet: true });
+
 const PORT = Number(process.env.PORT ?? 3001);
-const WORK_DIR = process.env.PIPELINE_WORK_DIR ?? process.cwd();
+
+// Defaults to a dedicated "work/" folder at the repo root, rather than
+// process.cwd(), so pipeline output lands in a predictable place no matter
+// which workspace directory the server process happens to be launched from.
+const WORK_DIR = process.env.PIPELINE_WORK_DIR
+  ? path.resolve(REPO_ROOT, process.env.PIPELINE_WORK_DIR)
+  : path.join(REPO_ROOT, "work");
+fs.mkdirSync(WORK_DIR, { recursive: true });
 
 export function createApp(orchestrator: Orchestrator) {
   const app = express();

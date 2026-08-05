@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { nanoid } from "nanoid";
 import { parseClaudeOutput } from "./claudeParser.js";
 import { computeRateLimitHealth, DEFAULT_RATE_LIMIT_CONFIG, type RateLimitConfig } from "./rateLimit.js";
@@ -25,7 +26,11 @@ export interface OrchestratorOptions {
   rateLimitConfig?: RateLimitConfig;
   claudeBin?: string;
   openCodeBin?: string;
+  /** Kills a phase's child process if it hasn't exited within this long. */
+  phaseTimeoutMs?: number;
 }
+
+const DEFAULT_PHASE_TIMEOUT_MS = 15 * 60_000;
 
 const PHASE_ORDER: PhaseId[] = ["plan", "generate", "verify"];
 
@@ -88,6 +93,7 @@ export class Orchestrator extends EventEmitter {
   private readonly rateLimitConfig: RateLimitConfig;
   private readonly claudeBin: string;
   private readonly openCodeBin: string;
+  private readonly phaseTimeoutMs: number;
   private currentChild: ChildProcess | null = null;
   private turnTimestamps: number[] = [];
   private cancelled = false;
@@ -96,11 +102,17 @@ export class Orchestrator extends EventEmitter {
 
   constructor(options: OrchestratorOptions = {}) {
     super();
-    this.spawnFn = options.spawnFn ?? (nodeSpawn as SpawnFn);
+    // cross-spawn (not node:child_process directly) because on Windows npm
+    // installs most CLIs (e.g. opencode) as .cmd/.ps1 shims with no bare
+    // .exe on PATH; Node's spawn with shell:false can't resolve those and
+    // fails with ENOENT, while cross-spawn resolves them correctly without
+    // needing shell:true (which would reopen shell-injection risk).
+    this.spawnFn = options.spawnFn ?? (crossSpawn as SpawnFn);
     this.workDir = options.workDir ?? process.cwd();
     this.rateLimitConfig = options.rateLimitConfig ?? DEFAULT_RATE_LIMIT_CONFIG;
     this.claudeBin = options.claudeBin ?? "claude";
     this.openCodeBin = options.openCodeBin ?? "opencode";
+    this.phaseTimeoutMs = options.phaseTimeoutMs ?? DEFAULT_PHASE_TIMEOUT_MS;
     this.state = this.freshState();
   }
 
@@ -252,10 +264,34 @@ export class Orchestrator extends EventEmitter {
           env,
         };
       case "generate":
+        // Only overrides GEMINI_API_KEY when one is actually configured.
+        // Forcing it to "" when unset would shadow a valid credential
+        // opencode already has stored via `opencode auth login`
+        // (~/.local/share/opencode/auth.json), turning a working setup into
+        // a broken one.
         return {
           command: this.openCodeBin,
-          args: ["run", "Read SPEC.md and generate source code"],
-          env: { ...env, GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "" },
+          args: [
+            "run",
+            "Read SPEC.md and generate source code",
+            // --auto: without it, opencode blocks on an interactive
+            // file-write permission prompt that never resolves headlessly
+            // (mirrors claude's --dangerously-skip-permissions above).
+            "--auto",
+            // opencode does not reliably honor the spawned process's cwd
+            // for file operations; --dir pins it explicitly.
+            "--dir",
+            this.workDir,
+            // Without this, provider errors (e.g. a rate-limited/quota-
+            // exhausted API key) are retried silently forever with zero
+            // stdout/stderr — the phase looks hung instead of visibly
+            // failing. --print-logs surfaces those retry/error lines so
+            // they show up in the streamed terminal log.
+            "--print-logs",
+          ],
+          env: process.env.GEMINI_API_KEY
+            ? { ...env, GEMINI_API_KEY: process.env.GEMINI_API_KEY }
+            : env,
         };
       case "verify":
         return {
@@ -284,8 +320,19 @@ export class Orchestrator extends EventEmitter {
         cwd: this.workDir,
         env,
         shell: false,
+        // Explicitly closed rather than left as an open, empty pipe: some
+        // CLIs (opencode observed) block indefinitely waiting for stdin
+        // EOF that never comes when stdio defaults to "pipe" under
+        // child_process. claude has its own 3s "no stdin" fallback, but
+        // not every CLI does, so this is applied uniformly.
+        stdio: ["ignore", "pipe", "pipe"],
       });
       this.currentChild = child;
+
+      const timeout = setTimeout(() => {
+        child.kill("SIGTERM");
+        reject(new Error(`Timed out after ${Math.round(this.phaseTimeoutMs / 1000)}s with no exit`));
+      }, this.phaseTimeoutMs);
 
       child.stdout?.on("data", (data: Buffer) => {
         const text = data.toString();
@@ -299,11 +346,13 @@ export class Orchestrator extends EventEmitter {
       });
 
       child.on("error", (err) => {
+        clearTimeout(timeout);
         this.currentChild = null;
         reject(err);
       });
 
       child.on("close", (code) => {
+        clearTimeout(timeout);
         this.currentChild = null;
         resolve(code ?? 0);
       });

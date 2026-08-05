@@ -30,7 +30,14 @@ describe("Orchestrator", () => {
     expect(calls[0].command).toBe("claude");
     expect(calls[0].args).toContain("--dangerously-skip-permissions");
     expect(calls[1].command).toBe("opencode");
-    expect(calls[1].args).toEqual(["run", "Read SPEC.md and generate source code"]);
+    expect(calls[1].args).toEqual([
+      "run",
+      "Read SPEC.md and generate source code",
+      "--auto",
+      "--dir",
+      "/tmp/project",
+      "--print-logs",
+    ]);
     expect(calls[2].command).toBe("claude");
 
     const state = orchestrator.getState();
@@ -157,5 +164,27 @@ describe("Orchestrator", () => {
     expect(killed).toBe(true);
     expect(calls).toHaveLength(1);
     expect(orchestrator.getState().status).toBe("failed");
+  });
+
+  it("kills a hung phase and fails it once phaseTimeoutMs elapses with no exit", async () => {
+    let killed = false;
+    const spawnFn: SpawnFn = () => {
+      const child = createMockChild();
+      // Never emits "close" on its own, simulating a genuinely hung CLI
+      // (observed in practice: opencode blocking forever on an unclosed
+      // stdin pipe). kill() is what the timeout must call to recover.
+      child.kill = () => {
+        killed = true;
+      };
+      return child as unknown as ChildProcess;
+    };
+    const orchestrator = new Orchestrator({ spawnFn, phaseTimeoutMs: 20 });
+
+    await orchestrator.start("Build a todo app");
+
+    expect(killed).toBe(true);
+    const state = orchestrator.getState();
+    expect(state.status).toBe("failed");
+    expect(state.phases.plan.status).toBe("failed");
   });
 });

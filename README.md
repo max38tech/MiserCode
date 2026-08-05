@@ -6,7 +6,7 @@ processes and streaming their output live over WebSockets.
 
 ```
 Phase 1  Architect & Plan   claude -p "<prompt>" --output-format json --dangerously-skip-permissions
-Phase 2  Bulk Coding        opencode run "Read SPEC.md and generate source code"   (GEMINI_API_KEY)
+Phase 2  Bulk Coding        opencode run "Read SPEC.md and generate source code" --auto --dir <work> --print-logs
 Phase 3  Verification       claude -p "Inspect repo, run tests, fix errors until 100% pass" --output-format json --dangerously-skip-permissions
 ```
 
@@ -19,8 +19,10 @@ Phase 3  Verification       claude -p "Inspect repo, run tests, fix errors until
 
 - Node.js >= 18.18
 - [`claude`](https://docs.claude.com/en/docs/claude-code) CLI installed and authenticated on `PATH`
-- [`opencode`](https://opencode.ai) CLI installed on `PATH`, configured to use Gemini
-- A `GEMINI_API_KEY`
+- [`opencode`](https://opencode.ai) CLI installed on `PATH`, authenticated to a
+  provider — check with `opencode auth list`. If it already shows a Google/Gemini
+  credential (from `opencode auth login`), you do **not** need `GEMINI_API_KEY`
+  in `.env`; it's only a fallback for machines without a stored credential.
 
 ## Setup
 
@@ -80,3 +82,33 @@ remaining quota.
 See `.env.example`. Notably `CLAUDE_WINDOW_MINUTES` /
 `CLAUDE_MAX_TURNS_PER_WINDOW` tune the rate-limit health estimate to match
 your actual Claude plan.
+
+## Troubleshooting
+
+**Phase 2 ("Bulk Coding") appears to hang with no output.** Most likely the
+Gemini/Google API key `opencode` is authenticated with has hit its quota
+(the free tier is 20 requests). `opencode`'s own retries against a
+rate-limited provider don't stop on their own and are otherwise silent, so
+without `--print-logs` (which the orchestrator always passes) the phase
+just looks frozen instead of failing. With it, you'll see repeating
+`AI_APICallError: You exceeded your current quota...` lines in the Live
+Terminal Output — that confirms it's a provider-side quota issue, not an
+app bug. Check https://ai.dev/rate-limit, wait for the window to reset, or
+switch to a paid-tier key. If a phase is still stuck after several
+minutes, the orchestrator force-kills it and marks it failed after 15
+minutes (`phaseTimeoutMs` in `Orchestrator`'s constructor options).
+
+**Phase 2 fails with `spawn opencode ENOENT`.** On Windows, npm installs
+most CLIs (including `opencode`) as `.cmd`/`.ps1` shims with no bare `.exe`
+on `PATH`. Node's `child_process.spawn` with `shell: false` can't resolve
+those directly. The orchestrator spawns via
+[`cross-spawn`](https://www.npmjs.com/package/cross-spawn) specifically to
+handle this without needing `shell: true` (which would reopen
+shell-injection risk from the user prompt). If you still hit this, confirm
+`opencode` is actually installed and on `PATH` for the same shell context
+the server process runs in (`Get-Command opencode` in PowerShell — not just
+git-bash's `which`, which resolves `PATH` differently).
+
+**Generated files show up in an unexpected folder.** All three phases run
+with their cwd set to `PIPELINE_WORK_DIR` (default: `<repo root>/work/`,
+auto-created). If that folder doesn't have what you expect, check `.env`.
