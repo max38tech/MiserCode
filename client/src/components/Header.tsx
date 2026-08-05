@@ -1,4 +1,4 @@
-import { Download, Terminal, Wifi, WifiOff, Loader2 } from "lucide-react";
+import { Download, Settings, Terminal, Wifi, WifiOff, Loader2 } from "lucide-react";
 import type { ConnectionStatus } from "../hooks/useOrchestrator";
 
 interface HeaderProps {
@@ -6,6 +6,7 @@ interface HeaderProps {
   elapsed: string;
   canInstall: boolean;
   onInstall: () => void;
+  onOpenSettings: () => void;
 }
 
 const STATUS_CONFIG: Record<ConnectionStatus, { label: string; className: string; icon: typeof Wifi }> = {
@@ -14,7 +15,7 @@ const STATUS_CONFIG: Record<ConnectionStatus, { label: string; className: string
   closed: { label: "Disconnected", className: "text-red-400", icon: WifiOff },
 };
 
-export function Header({ connectionStatus, elapsed, canInstall, onInstall }: HeaderProps) {
+export function Header({ connectionStatus, elapsed, canInstall, onInstall, onOpenSettings }: HeaderProps) {
   const status = STATUS_CONFIG[connectionStatus];
   const StatusIcon = status.icon;
 
@@ -59,6 +60,15 @@ export function Header({ connectionStatus, elapsed, canInstall, onInstall }: Hea
               <span className="hidden sm:inline">Install App</span>
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="Open settings"
+            className="rounded-md p-1.5 text-slate-400 transition hover:bg-surface-800 hover:text-slate-200"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </header>

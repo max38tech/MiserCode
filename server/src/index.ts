@@ -7,6 +7,7 @@ import cors from "cors";
 import { config as loadEnv } from "dotenv";
 import { Orchestrator } from "./orchestrator.js";
 import { attachWebSocketServer } from "./wsServer.js";
+import { maskSecret, upsertEnvValue } from "./envFile.js";
 
 // __dirname here is server/src (dev, via tsx) or server/dist (built), so
 // "../.." reaches the repo root in both cases. Loading the root .env
@@ -15,7 +16,8 @@ import { attachWebSocketServer } from "./wsServer.js";
 // cwd set to the workspace folder, not the repo root).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
-loadEnv({ path: path.join(REPO_ROOT, ".env"), quiet: true });
+const ENV_PATH = path.join(REPO_ROOT, ".env");
+loadEnv({ path: ENV_PATH, quiet: true });
 
 const PORT = Number(process.env.PORT ?? 3001);
 
@@ -27,7 +29,8 @@ const WORK_DIR = process.env.PIPELINE_WORK_DIR
   : path.join(REPO_ROOT, "work");
 fs.mkdirSync(WORK_DIR, { recursive: true });
 
-export function createApp(orchestrator: Orchestrator) {
+export function createApp(orchestrator: Orchestrator, options: { envPath?: string } = {}) {
+  const envPath = options.envPath ?? ENV_PATH;
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -38,6 +41,35 @@ export function createApp(orchestrator: Orchestrator) {
 
   app.get("/api/state", (_req: Request, res: Response) => {
     res.json(orchestrator.getState());
+  });
+
+  app.get("/api/settings", (_req: Request, res: Response) => {
+    const key = process.env.GEMINI_API_KEY ?? "";
+    res.json({
+      geminiApiKeyConfigured: key.length > 0,
+      geminiApiKeyPreview: key ? maskSecret(key) : null,
+      workDir: orchestrator.getWorkDir(),
+    });
+  });
+
+  app.put("/api/settings", (req: Request, res: Response) => {
+    const { geminiApiKey } = req.body ?? {};
+    if (typeof geminiApiKey !== "string") {
+      res.status(400).json({ ok: false, error: "geminiApiKey must be a string" });
+      return;
+    }
+
+    // An empty string intentionally clears the key, falling back to
+    // whatever opencode already has stored via `opencode auth login`.
+    const trimmed = geminiApiKey.trim();
+    process.env.GEMINI_API_KEY = trimmed;
+    upsertEnvValue(envPath, "GEMINI_API_KEY", trimmed);
+
+    res.json({
+      ok: true,
+      geminiApiKeyConfigured: trimmed.length > 0,
+      geminiApiKeyPreview: trimmed ? maskSecret(trimmed) : null,
+    });
   });
 
   app.post("/api/start", async (req: Request, res: Response) => {
@@ -68,8 +100,11 @@ export function createApp(orchestrator: Orchestrator) {
   return app;
 }
 
-export function createServer(orchestrator: Orchestrator = new Orchestrator({ workDir: WORK_DIR })) {
-  const app = createApp(orchestrator);
+export function createServer(
+  orchestrator: Orchestrator = new Orchestrator({ workDir: WORK_DIR }),
+  options: { envPath?: string } = {}
+) {
+  const app = createApp(orchestrator, options);
   const server = http.createServer(app);
   attachWebSocketServer(server, orchestrator);
   return { app, server, orchestrator };

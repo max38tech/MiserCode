@@ -138,6 +138,10 @@ export class Orchestrator extends EventEmitter {
     return this.state;
   }
 
+  getWorkDir(): string {
+    return this.workDir;
+  }
+
   isRunning(): boolean {
     return this.state.status === "running";
   }

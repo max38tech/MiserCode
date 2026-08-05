@@ -28,12 +28,30 @@ Phase 3  Verification       claude -p "Inspect repo, run tests, fix errors until
 
 ```bash
 npm install
-cp .env.example .env   # fill in GEMINI_API_KEY and PIPELINE_WORK_DIR
+cp .env.example .env   # optional — fill in PIPELINE_WORK_DIR if you want a
+                        # non-default location; GEMINI_API_KEY can be set
+                        # from the dashboard itself, see below
 ```
 
 `PIPELINE_WORK_DIR` should point at the repository the pipeline will operate
-on (where `SPEC.md` and generated source land). It defaults to the server's
-own working directory if unset.
+on (where `SPEC.md` and generated source land). It defaults to
+`<repo root>/work/` if unset.
+
+## Changing the Gemini API key
+
+Click the gear icon in the header to open **Settings**. You can set, view
+(masked), or clear the Gemini API key from there at any time — including
+mid-session if a key runs out of quota — with no server restart needed:
+saving calls `PUT /api/settings`, which updates `process.env.GEMINI_API_KEY`
+immediately and persists it to `.env` (via `server/src/envFile.ts`) so it
+survives the next restart too. The next "generate" phase run picks it up
+automatically since `Orchestrator.buildCommand` reads `process.env` fresh on
+every invocation.
+
+This is optional, not required setup: if `opencode auth list` already shows
+a stored Google/Gemini credential, the pipeline works without ever touching
+this field. Use it to override that credential, or to recover after the one
+in use hits its quota (see Troubleshooting below).
 
 ## Development
 
@@ -94,7 +112,8 @@ just looks frozen instead of failing. With it, you'll see repeating
 `AI_APICallError: You exceeded your current quota...` lines in the Live
 Terminal Output — that confirms it's a provider-side quota issue, not an
 app bug. Check https://ai.dev/rate-limit, wait for the window to reset, or
-switch to a paid-tier key. If a phase is still stuck after several
+paste a different key into **Settings** (gear icon, top right) — it applies
+immediately, no restart required. If a phase is still stuck after several
 minutes, the orchestrator force-kills it and marks it failed after 15
 minutes (`phaseTimeoutMs` in `Orchestrator`'s constructor options).
 
